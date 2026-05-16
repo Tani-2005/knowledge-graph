@@ -4,6 +4,7 @@ import InteractiveGraph from '../components/graph/InteractiveGraph';
 import ChatInterface from '../components/chat/ChatInterface';
 import NodeDetailsPanel from '../components/graph/NodeDetailsPanel';
 import UploadModal from '../components/upload/UploadModal';
+import { graphApi } from '../services/api';
 import { useAppStore } from '../store/useAppStore';
 
 export default function Dashboard() {
@@ -13,9 +14,15 @@ export default function Dashboard() {
     // Optionally fetch initial graph data
     const fetchInitialGraph = async () => {
       try {
-        // Uncomment when backend has /graph endpoint ready
-        // const data = await graphApi.fetchGraph();
-        // setGraphData(data);
+        const data = await graphApi.fetchGraph();
+        const results = data.results || {};
+        const normalized = {
+          nodes: results.nodes || [],
+          links: results.links || results.relationships || [],
+        };
+        if (normalized.nodes.length > 0 || normalized.links.length > 0) {
+          setGraphData(normalized);
+        }
       } catch (error) {
         console.error('Failed to fetch initial graph:', error);
       }
