@@ -55,13 +55,33 @@ def create_app(neo4j_uri: str = None, neo4j_user: str = None, neo4j_password: st
             from src.graphqa import GraphQA
             loader = Neo4jLoader(neo4j_uri, neo4j_user, neo4j_password)
             gqa = GraphQA(neo4j_uri, neo4j_user, neo4j_password)
-        except Exception:
+        except Exception as e:
             # If driver missing, endpoints will return 500 until proper config is provided
+            print(f"ERROR initializing GraphQA/Loader: {e}")
             loader = None
             gqa = None
 
+    MOCK_NODES = {
+        "AI": {"id": "AI", "type": "Technology", "name": "Artificial Intelligence"},
+        "LLM": {"id": "LLM", "type": "Technology", "name": "Large Language Model"},
+        "Neo4j": {"id": "Neo4j", "type": "Database", "name": "Neo4j Graph Database"},
+        "RAG": {"id": "RAG", "type": "Concept", "name": "Retrieval Augmented Generation"}
+    }
+    MOCK_RELS = [
+        {"source": "LLM", "target": "AI", "type": "IS_A", "relation_type": "IS_A"},
+        {"source": "RAG", "target": "LLM", "type": "USES", "relation_type": "USES"},
+        {"source": "RAG", "target": "Neo4j", "type": "USES", "relation_type": "USES"}
+    ]
+
     @app.post('/ingest', dependencies=[Depends(verify_api_key)])
     def ingest(req: IngestRequest):
+        if neo4j_uri == 'mock':
+            for n in req.graph.get('nodes', []):
+                MOCK_NODES[n.get('id')] = n
+            for r in req.graph.get('relationships', []):
+                MOCK_RELS.append(r)
+            return {"status": "ok", "mock": True}
+
         if loader is None:
             raise HTTPException(status_code=500, detail="Neo4j loader not configured")
         try:
@@ -81,7 +101,7 @@ def create_app(neo4j_uri: str = None, neo4j_user: str = None, neo4j_password: st
             raise HTTPException(status_code=500, detail=str(e))
     @app.post('/upload', dependencies=[Depends(verify_api_key)])
     async def upload(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
-        if loader is None:
+        if loader is None and neo4j_uri != 'mock':
             raise HTTPException(status_code=500, detail="Neo4j loader not configured")
         
         import tempfile
@@ -122,7 +142,13 @@ def create_app(neo4j_uri: str = None, neo4j_user: str = None, neo4j_password: st
                     "relationships": all_relationships
                 }
                 
-                loader.load_from_dict(final_output)
+                if neo4j_uri == 'mock':
+                    for n in final_output['nodes']:
+                        MOCK_NODES[n.get('id')] = n
+                    for r in final_output['relationships']:
+                        MOCK_RELS.append(r)
+                else:
+                    loader.load_from_dict(final_output)
                 logger.info(f"Successfully processed and loaded {path.name} to Neo4j")
             except Exception as e:
                 logger.error(f"Failed to process PDF {path.name}: {e}")
@@ -135,40 +161,76 @@ def create_app(neo4j_uri: str = None, neo4j_user: str = None, neo4j_password: st
 
     @app.get('/graph', dependencies=[Depends(verify_api_key)])
     def get_graph():
+        if neo4j_uri == 'mock':
+            nodes = []
+            for k, v in MOCK_NODES.items():
+                nodes.append({
+                    "id": k,
+                    "type": v.get("type", "Entity"),
+                    "label": v.get("name", k),
+                    **{pk: pv for pk, pv in v.items() if pk not in ["id", "type", "name"]}
+                })
+            links = []
+            for r in MOCK_RELS:
+                links.append({
+                    "source": r.get("source"),
+                    "target": r.get("target"),
+                    "type": r.get("type", "RELATED_TO"),
+                    **{pk: pv for pk, pv in r.items() if pk not in ["type", "source", "target"]}
+                })
+            return {"results": {"nodes": nodes, "relationships": links}}
+
         if loader is None:
             raise HTTPException(status_code=500, detail="Neo4j loader not configured")
             
         try:
             with loader.driver.session() as session:
-                result = session.run("MATCH (n:Entity)-[r:REL]->(m:Entity) RETURN n, r, m LIMIT 500")
                 nodes = {}
                 links = []
-                for record in result:
+
+                # Fetch all entity and document nodes so the graph can render standalone nodes and provenance relationships.
+                node_result = session.run("MATCH (n) RETURN n LIMIT 1000")
+                for record in node_result:
                     n = record["n"]
-                    m = record["m"]
-                    r = record["r"]
-                    
-                    if n["id"] not in nodes:
-                        nodes[n["id"]] = {
-                            "id": n["id"],
+                    node_id = n.get("id") or n.id
+                    if node_id not in nodes:
+                        nodes[node_id] = {
+                            "id": node_id,
                             "type": n.get("type", "Entity"),
-                            "label": n.get("name", n["id"]),
+                            "label": n.get("name", node_id),
                             **{k: v for k, v in dict(n).items() if k not in ["id", "type", "name"]}
                         }
-                    if m["id"] not in nodes:
-                        nodes[m["id"]] = {
-                            "id": m["id"],
-                            "type": m.get("type", "Entity"),
-                            "label": m.get("name", m["id"]),
-                            **{k: v for k, v in dict(m).items() if k not in ["id", "type", "name"]}
+
+                rel_result = session.run("MATCH (a)-[r]->(b) RETURN a, r, b LIMIT 1000")
+                for record in rel_result:
+                    a = record["a"]
+                    b = record["b"]
+                    r = record["r"]
+                    source_id = a.get("id") or a.id
+                    target_id = b.get("id") or b.id
+
+                    if source_id not in nodes:
+                        nodes[source_id] = {
+                            "id": source_id,
+                            "type": a.get("type", "Entity"),
+                            "label": a.get("name", source_id),
+                            **{k: v for k, v in dict(a).items() if k not in ["id", "type", "name"]}
                         }
-                        
+                    if target_id not in nodes:
+                        nodes[target_id] = {
+                            "id": target_id,
+                            "type": b.get("type", "Entity"),
+                            "label": b.get("name", target_id),
+                            **{k: v for k, v in dict(b).items() if k not in ["id", "type", "name"]}
+                        }
+
                     links.append({
-                        "source": n["id"],
-                        "target": m["id"],
-                        "type": r.get("relation_type", "RELATED_TO"),
+                        "source": source_id,
+                        "target": target_id,
+                        "type": r.type if hasattr(r, 'type') else r.get("relation_type", "RELATED_TO"),
                         **{k: v for k, v in dict(r).items() if k not in ["relation_type"]}
                     })
+
                 return {"results": {"nodes": list(nodes.values()), "relationships": links}}
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
@@ -179,6 +241,8 @@ def create_app(neo4j_uri: str = None, neo4j_user: str = None, neo4j_password: st
 
     @app.get('/ready')
     def ready():
+        if neo4j_uri == 'mock':
+            return {"ready": True, "mock": True}
         # readiness: ensure Neo4j driver is available and responds to a simple query
         if loader is None:
             raise HTTPException(status_code=503, detail="Neo4j loader not configured")

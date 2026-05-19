@@ -10,7 +10,22 @@ const getNodeColor = (type: string) => {
   if (t.includes('task')) return 'var(--node-task)';
   if (t.includes('dataset')) return 'var(--node-dataset)';
   if (t.includes('paper')) return 'var(--node-paper)';
+  if (t.includes('type')) return 'var(--node-task)';
+  if (t.includes('category')) return '#ffb86c';
+  if (t.includes('order')) return '#8b5cf6';
+  if (t.includes('person')) return '#22c55e';
+  if (t.includes('product')) return '#38bdf8';
   return 'var(--node-default)';
+};
+
+const renderLinkLabel = (link: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
+  const label = link.type || link.label || 'REL';
+  const fontSize = 10 / globalScale;
+  ctx.font = `${fontSize}px Sans-Serif`;
+  ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, (link.source.x + link.target.x) / 2, (link.source.y + link.target.y) / 2 - 6);
 };
 
 export default function InteractiveGraph() {
@@ -37,7 +52,6 @@ export default function InteractiveGraph() {
   const handleNodeClick = useCallback((node: any) => {
     setSelectedNode(node as NodeData);
     
-    // Zoom to node
     if (graphRef.current) {
       graphRef.current.centerAt(node.x, node.y, 1000);
       graphRef.current.zoom(8, 2000);
@@ -55,17 +69,18 @@ export default function InteractiveGraph() {
         width={dimensions.width}
         height={dimensions.height}
         graphData={graphData}
-        nodeLabel="label"
-        nodeColor={(n: any) => 
-          selectedNode?.id === n.id 
+        nodeLabel={(node: any) => `${node.type}: ${node.label}`}
+        nodeColor={(node: any) => 
+          selectedNode?.id === node.id 
             ? '#ffffff' 
-            : getNodeColor(n.type)
+            : getNodeColor(node.type)
         }
-        nodeRelSize={6}
-        linkColor={() => 'rgba(255,255,255,0.2)'}
-        linkWidth={1}
-        linkDirectionalArrowLength={3.5}
+        nodeRelSize={8}
+        linkColor={() => 'rgba(255,255,255,0.25)'}
+        linkWidth={(link: any) => (selectedNode && (selectedNode.id === link.source.id || selectedNode.id === link.target.id) ? 2 : 1)}
+        linkDirectionalArrowLength={8}
         linkDirectionalArrowRelPos={1}
+        linkLabel={(link: any) => link.type || link.label || 'RELATED_TO'}
         onNodeClick={handleNodeClick}
         onBackgroundClick={handleBackgroundClick}
         nodeCanvasObject={(node: any, ctx, globalScale) => {
@@ -74,7 +89,7 @@ export default function InteractiveGraph() {
           const isSelected = selectedNode?.id === node.id;
           
           ctx.beginPath();
-          ctx.arc(node.x, node.y, isSelected ? 6 : 5, 0, 2 * Math.PI, false);
+          ctx.arc(node.x, node.y, isSelected ? 7 : 6, 0, 2 * Math.PI, false);
           ctx.fillStyle = isSelected ? '#ffffff' : getNodeColor(node.type);
           ctx.fill();
           
@@ -84,13 +99,18 @@ export default function InteractiveGraph() {
             ctx.stroke();
           }
 
-          if (globalScale > 1.5 || isSelected) {
-            ctx.font = `${fontSize}px Sans-Serif`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillStyle = isSelected ? '#ffffff' : 'rgba(255, 255, 255, 0.8)';
-            ctx.fillText(label, node.x, node.y + (isSelected ? 10 : 8));
-          }
+          ctx.font = `${fontSize}px Sans-Serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillStyle = isSelected ? '#ffffff' : 'rgba(255, 255, 255, 0.9)';
+          ctx.fillText(label, node.x, node.y + 10);
+        }}
+        linkCanvasObjectMode={() => 'after'}
+        linkCanvasObject={(link: any, ctx, globalScale) => {
+          const start = link.source;
+          const end = link.target;
+          if (typeof start !== 'object' || typeof end !== 'object') return;
+          renderLinkLabel(link, ctx, globalScale);
         }}
       />
     </div>

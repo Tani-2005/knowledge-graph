@@ -7,10 +7,29 @@ import { graphApi } from '../../services/api';
 import { Card } from '../ui/Card';
 
 export default function UploadModal() {
-  const { isUploadModalOpen, setUploadModalOpen, addUploadedPaper } = useAppStore();
+  const { isUploadModalOpen, setUploadModalOpen, addUploadedPaper, setGraphData } = useAppStore();
   const [file, setFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const waitForGraphRefresh = async (retries = 5, intervalMs = 2000) => {
+    for (let attempt = 0; attempt < retries; attempt += 1) {
+      try {
+        const result = await graphApi.fetchGraph();
+        const nodes = result.results.nodes || [];
+        const links = result.results.links || [];
+
+        if (nodes.length > 0 || links.length > 0) {
+          setGraphData({ nodes, links });
+          return true;
+        }
+      } catch (err) {
+        console.warn('Graph refresh attempt failed', err);
+      }
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+    return false;
+  };
 
   if (!isUploadModalOpen) return null;
 
@@ -47,10 +66,14 @@ export default function UploadModal() {
     setError(null);
 
     try {
-      // Assuming backend processes and saves it
       await graphApi.uploadPaper(file);
       addUploadedPaper({ name: file.name, date: new Date().toISOString() });
       handleClose();
+
+      const refreshed = await waitForGraphRefresh();
+      if (!refreshed) {
+        console.warn('Graph data not available yet after upload. It may still be processing in the backend.');
+      }
     } catch (err: any) {
       console.error(err);
       setError(err.response?.data?.detail || err.message || 'Failed to upload paper');
